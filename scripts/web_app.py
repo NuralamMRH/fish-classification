@@ -34,17 +34,17 @@ ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'bmp'}
 DEFAULT_PX_PER_CM = 37.7952755906
 CLASS_INFO_PATH = os.path.join(PROJECT_ROOT, 'models', 'classification', 'info.json')
 SPECIES_RULES = [
-    {"kw": ["bluefin tuna"], "len": (160, 180), "wt": (140, 180), "sci": "Thunnus thynnus"},
-    {"kw": ["yellowfin tuna", "thunnus albacares"], "len": (150, 170), "wt": (110, 150), "sci": "Thunnus albacares"},
-    {"kw": ["giant grouper", "epinephelus lanceolatus", "grouper"], "len": (150, 170), "wt": (90, 120), "sci": "Epinephelus lanceolatus"},
-    {"kw": ["marlin"], "len": (170, 200), "wt": (120, 160), "sci": "Istiophoridae"},
-    {"kw": ["swordfish", "xiphias gladius"], "len": (160, 180), "wt": (100, 140), "sci": "Xiphias gladius"},
-    {"kw": ["shark"], "len": (160, 190), "wt": (90, 130), "sci": "Selachimorpha"},
-    {"kw": ["mekong catfish", "giant catfish", "catfish", "pangasianodon gigas"], "len": (140, 160), "wt": (80, 110), "sci": "Pangasianodon gigas"},
-    {"kw": ["common carp", "cyprinus carpio", "carp"], "len": (140, 150), "wt": (55, 70), "sci": "Cyprinus carpio"},
-    {"kw": ["grass carp", "ctenopharyngodon idella"], "len": (150, 160), "wt": (60, 85), "sci": "Ctenopharyngodon idella"},
-    {"kw": ["barramundi", "lates calcarifer"], "len": (140, 150), "wt": (45, 60), "sci": "Lates calcarifer"},
-    {"kw": ["hilsa", "tenualosa ilisha"], "len": (120, 130), "wt": (25, 35), "sci": "Tenualosa ilisha"},
+    {"kw": ["bluefin tuna", "thunnus thynnus"], "len": (160, 180), "wt": (140, 180), "sci": "Thunnus thynnus", "common": "Bluefin tuna"},
+    {"kw": ["yellowfin tuna", "thunnus albacares"], "len": (150, 170), "wt": (110, 150), "sci": "Thunnus albacares", "common": "Yellowfin tuna"},
+    {"kw": ["giant grouper", "epinephelus lanceolatus", "grouper"], "len": (150, 170), "wt": (90, 120), "sci": "Epinephelus lanceolatus", "common": "Giant grouper"},
+    {"kw": ["marlin", "istiophoridae"], "len": (170, 200), "wt": (120, 160), "sci": "Istiophoridae", "common": "Marlin"},
+    {"kw": ["swordfish", "xiphias gladius"], "len": (160, 180), "wt": (100, 140), "sci": "Xiphias gladius", "common": "Swordfish"},
+    {"kw": ["shark", "selachimorpha"], "len": (160, 190), "wt": (90, 130), "sci": "Selachimorpha", "common": "Shark"},
+    {"kw": ["mekong catfish", "giant catfish", "catfish", "pangasianodon gigas"], "len": (140, 160), "wt": (80, 110), "sci": "Pangasianodon gigas", "common": "Mekong giant catfish"},
+    {"kw": ["common carp", "cyprinus carpio", "carp"], "len": (140, 150), "wt": (55, 70), "sci": "Cyprinus carpio", "common": "Common carp"},
+    {"kw": ["grass carp", "ctenopharyngodon idella"], "len": (150, 160), "wt": (60, 85), "sci": "Ctenopharyngodon idella", "common": "Grass carp"},
+    {"kw": ["barramundi", "lates calcarifer"], "len": (140, 150), "wt": (45, 60), "sci": "Lates calcarifer", "common": "Barramundi"},
+    {"kw": ["hilsa", "tenualosa ilisha"], "len": (120, 130), "wt": (25, 35), "sci": "Tenualosa ilisha", "common": "Hilsa"},
 ]
 def _match_species_rule(name):
     n = (name or "").lower()
@@ -331,7 +331,7 @@ def create_annotated_image(image_path, detection_results):
             if fish.get('face_box'):
                 fx1, fy1, fx2, fy2 = fish['face_box']
                 cv2.rectangle(image, (fx1, fy1), (fx2, fy2), color, 2)
-            label = f"{species}"
+            label = f"{fish.get('common_name') or species}"
             confidence_text = f"Acc: {accuracy:.2f}"
             font = cv2.FONT_HERSHEY_SIMPLEX
             font_scale = 0.6
@@ -666,12 +666,14 @@ else:
                 rule = _match_species_rule(final_item["species"])
                 if rule:
                     final_item["scientific_name"] = rule["sci"]
+                    final_item["common_name"] = rule.get("common", final_item["species"])
                     final_item["measurements"]["rule_weight_kg_min"] = rule["wt"][0]
                     final_item["measurements"]["rule_weight_kg_max"] = rule["wt"][1]
                     final_item["measurements"]["rule_length_cm_min"] = rule["len"][0]
                     final_item["measurements"]["rule_length_cm_max"] = rule["len"][1]
                 else:
                     final_item["scientific_name"] = None
+                    final_item["common_name"] = final_item["species"]
             except Exception:
                 pass
             
@@ -924,7 +926,7 @@ HTML_TEMPLATE = """
                         {% for fish in results.fish %}
                             <div class="fish-item">
                                 <div class="fish-header">🐠 Fish #{{ fish.fish_id }}</div>
-                                <div class="species-name">{{ fish.species }}{% if fish.scientific_name %} ({{ fish.scientific_name }}){% endif %}</div>
+                                <div class="species-name">{{ fish.common_name or fish.species }}{% if fish.scientific_name %} ({{ fish.scientific_name }}){% endif %}</div>
                                 <p><strong>Classification Accuracy:</strong> 
                                     <span class="{% if fish.accuracy >= 0.8 %}accuracy-high{% elif fish.accuracy >= 0.6 %}accuracy-medium{% else %}accuracy-low{% endif %}">
                                         {{ (fish.accuracy * 100)|round(1) }}%
