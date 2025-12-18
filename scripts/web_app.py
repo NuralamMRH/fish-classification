@@ -175,7 +175,7 @@ def _rotate_points(pts, angle_deg, center):
     R = np.array([[np.cos(theta), -np.sin(theta)], [np.sin(theta), np.cos(theta)]], dtype=np.float32)
     shifted = pts - center
     rotated = shifted @ R.T
-    return rotated
+    return rotated + center
 
 def _estimate_lengths_and_width(pts):
     p = np.array(pts, dtype=np.float32)
@@ -215,7 +215,9 @@ def _compute_FL_and_girth_width(pts, rect):
     fork_x = float(centers[fork_idx])
     nose_x = float(np.max(xs))
     fl_px = max(0.0, nose_x - fork_x)
-    girth_width_px = float(np.max(widths))
+    mid_x = float((nose_x + fork_x) / 2.0)
+    mid_idx = int(np.argmin(np.abs(centers - mid_x)))
+    mid_idx = max(0, min(mid_idx, bins - 1))
     eps = max(1e-3, 0.01 * (x_max - x_min))
     nose_mask = np.abs(xs - nose_x) <= eps
     fork_mask = np.abs(xs - fork_x) <= eps
@@ -225,20 +227,70 @@ def _compute_FL_and_girth_width(pts, rect):
     fork_pt_rot = np.array([[fork_x, fork_y]], dtype=np.float32)
     nose_pt = _rotate_points(nose_pt_rot, -angle, center)[0]
     fork_pt = _rotate_points(fork_pt_rot, -angle, center)[0]
-    g_idx = int(np.argmax(widths))
-    gx = float(centers[g_idx])
-    g_mask = (xs >= edges[g_idx]) & (xs < edges[g_idx + 1])
-    if np.any(g_mask):
-        gy_top = float(np.max(ys[g_mask]))
-        gy_bottom = float(np.min(ys[g_mask]))
-    else:
-        gy_top = float(np.max(ys))
-        gy_bottom = float(np.min(ys))
-    g_top_rot = np.array([[gx, gy_top]], dtype=np.float32)
-    g_bottom_rot = np.array([[gx, gy_bottom]], dtype=np.float32)
-    g_top = _rotate_points(g_top_rot, -angle, center)[0]
-    g_bottom = _rotate_points(g_bottom_rot, -angle, center)[0]
-    return fl_px, girth_width_px, (nose_pt, fork_pt), (g_top, g_bottom)
+    mid_pt = (nose_pt + fork_pt) / 2.0
+    v_len = nose_pt - fork_pt
+    v_norm = np.linalg.norm(v_len)
+    if v_norm < 1e-6:
+        girth_width_px = float(np.max(widths))
+        gx = float(centers[mid_idx])
+        g_mask = (xs >= edges[mid_idx]) & (xs < edges[mid_idx + 1])
+        if np.any(g_mask):
+            gy_top = float(np.max(ys[g_mask]))
+            gy_bottom = float(np.min(ys[g_mask]))
+        else:
+            gy_top = float(np.max(ys))
+            gy_bottom = float(np.min(ys))
+        g_top_rot = np.array([[gx, gy_top]], dtype=np.float32)
+        g_bottom_rot = np.array([[gx, gy_bottom]], dtype=np.float32)
+        g_top = _rotate_points(g_top_rot, -angle, center)[0]
+        g_bottom = _rotate_points(g_bottom_rot, -angle, center)[0]
+        return fl_px, girth_width_px, (nose_pt, fork_pt), (g_top, g_bottom)
+    perp = np.array([-v_len[1], v_len[0]], dtype=np.float32) / v_norm
+    t_pos = None
+    t_neg = None
+    pos_pt = None
+    neg_pt = None
+    P = p.astype(np.float32)
+    M = mid_pt.astype(np.float32)
+    n_pts = len(P)
+    for i in range(n_pts):
+        A = P[i]
+        B = P[(i + 1) % n_pts]
+        E = B - A
+        A_mat = np.array([[perp[0], -E[0]], [perp[1], -E[1]]], dtype=np.float32)
+        b_vec = np.array([A[0] - M[0], A[1] - M[1]], dtype=np.float32)
+        det = np.linalg.det(A_mat)
+        if abs(det) < 1e-8:
+            continue
+        sol = np.linalg.solve(A_mat, b_vec)
+        t, u = float(sol[0]), float(sol[1])
+        if 0.0 <= u <= 1.0:
+            I = M + t * perp
+            if t >= 0:
+                if t_pos is None or t < t_pos:
+                    t_pos = t
+                    pos_pt = I
+            else:
+                if t_neg is None or t > t_neg:
+                    t_neg = t
+                    neg_pt = I
+    if pos_pt is None or neg_pt is None:
+        girth_width_px = float(widths[mid_idx])
+        gx = float(centers[mid_idx])
+        g_mask = (xs >= edges[mid_idx]) & (xs < edges[mid_idx + 1])
+        if np.any(g_mask):
+            gy_top = float(np.max(ys[g_mask]))
+            gy_bottom = float(np.min(ys[g_mask]))
+        else:
+            gy_top = float(np.max(ys))
+            gy_bottom = float(np.min(ys))
+        g_top_rot = np.array([[gx, gy_top]], dtype=np.float32)
+        g_bottom_rot = np.array([[gx, gy_bottom]], dtype=np.float32)
+        g_top = _rotate_points(g_top_rot, -angle, center)[0]
+        g_bottom = _rotate_points(g_bottom_rot, -angle, center)[0]
+        return fl_px, girth_width_px, (nose_pt, fork_pt), (g_top, g_bottom)
+    girth_width_px = float(np.linalg.norm(pos_pt - neg_pt))
+    return fl_px, girth_width_px, (nose_pt, fork_pt), (pos_pt, neg_pt)
 
 def create_annotated_image(image_path, detection_results):
     """Create an annotated image with bounding boxes and species labels."""
@@ -270,57 +322,55 @@ def create_annotated_image(image_path, detection_results):
             # Get color for this fish (cycle through colors)
             color = colors[i % len(colors)]
             
-            # Draw bounding box
             x1, y1, x2, y2 = box
-            cv2.rectangle(image, (x1, y1), (x2, y2), color, 3)
-            
             if fish.get('segmentation'):
                 pts = np.array(fish['segmentation']['points'], np.int32)
                 if len(pts) > 0:
                     pts = pts.reshape((-1, 1, 2))
                     cv2.polylines(image, [pts], isClosed=True, color=color, thickness=2)
-            
             if fish.get('face_box'):
                 fx1, fy1, fx2, fy2 = fish['face_box']
                 cv2.rectangle(image, (fx1, fy1), (fx2, fy2), color, 2)
-            
-            # Prepare label text
             label = f"{species}"
             confidence_text = f"Acc: {accuracy:.2f}"
-            
-            # Calculate text size for background rectangle
             font = cv2.FONT_HERSHEY_SIMPLEX
             font_scale = 0.6
             thickness = 2
-            
+            extras = []
+            m_for_label = fish.get('measurements')
+            if m_for_label:
+                try:
+                    if m_for_label.get('weight_kg_lgg_over_800'):
+                        extras.append(f"Weight L*G^2/800: {m_for_label.get('weight_kg_lgg_over_800')} kg")
+                except Exception:
+                    pass
             (label_width, label_height), _ = cv2.getTextSize(label, font, font_scale, thickness)
             (conf_width, conf_height), _ = cv2.getTextSize(confidence_text, font, font_scale, thickness)
-            
-            # Use the wider text for background width
-            bg_width = max(label_width, conf_width) + 10
-            bg_height = label_height + conf_height + 15
-            
-            # Draw background rectangle for text
-            cv2.rectangle(image, 
-                         (x1, y1 - bg_height - 5), 
-                         (x1 + bg_width, y1), 
-                         color, -1)
-            
-            # Draw species name
-            cv2.putText(image, label, 
-                       (x1 + 5, y1 - conf_height - 8), 
-                       font, font_scale, (0, 0, 0), thickness)
-            
-            # Draw accuracy below species name
-            cv2.putText(image, confidence_text, 
-                       (x1 + 5, y1 - 3), 
-                       font, font_scale, (0, 0, 0), thickness)
-            
-            # Add fish number in top-left corner of bounding box
-            fish_number = f"#{fish['fish_id']}"
-            cv2.putText(image, fish_number, 
-                       (x1 + 5, y1 + 25), 
-                       font, 0.5, color, 2)
+            extra_sizes = [cv2.getTextSize(t, font, font_scale, thickness)[0] for t in extras]
+            extra_widths = [w for (w, h) in extra_sizes]
+            extra_heights = [cv2.getTextSize(t, font, font_scale, thickness)[0][1] for t in extras]
+            bg_width = max([label_width, conf_width] + extra_widths) + 10
+            bg_height = label_height + conf_height + sum(extra_heights) + 15
+            if fish.get('segmentation') and fish['segmentation'] and fish['segmentation'].get('points'):
+                spts = np.array(fish['segmentation']['points'], dtype=np.int32)
+                cx = int(np.mean(spts[:, 0]))
+                cy = int(np.mean(spts[:, 1]))
+            else:
+                cx = int((x1 + x2) / 2)
+                cy = int((y1 + y2) / 2)
+            tlx = max(0, cx - bg_width // 2)
+            tly = max(0, cy - bg_height - 5)
+            brx = min(image.shape[1] - 1, cx + bg_width // 2)
+            bry = min(image.shape[0] - 1, cy)
+            cv2.rectangle(image, (tlx, tly), (brx, bry), color, -1)
+            y_cursor = tly + 5 + label_height
+            cv2.putText(image, label, (tlx + 5, y_cursor), font, font_scale, (0, 0, 0), thickness)
+            y_cursor += conf_height + 5
+            cv2.putText(image, confidence_text, (tlx + 5, y_cursor), font, font_scale, (0, 0, 0), thickness)
+            for t in extras:
+                th = cv2.getTextSize(t, font, font_scale, thickness)[0][1]
+                y_cursor += th + 5
+                cv2.putText(image, t, (tlx + 5, y_cursor), font, font_scale, (0, 0, 0), thickness)
             
             if fish.get('measurements'):
                 m = fish['measurements']
@@ -336,7 +386,7 @@ def create_annotated_image(image_path, detection_results):
                     if m.get('girth_line'):
                         gp1 = tuple(int(v) for v in m['girth_line'][0])
                         gp2 = tuple(int(v) for v in m['girth_line'][1])
-                        cv2.line(image, gp1, gp2, (0, 255, 0), 3)
+                        cv2.line(image, gp1, gp2, (176, 171, 255), 3)
                         gmid = (int((gp1[0] + gp2[0]) / 2), int((gp1[1] + gp2[1]) / 2))
                         gcm = m.get('girth_cm') if m.get('girth_cm') else (m.get('girth_px') or 0.0) / DEFAULT_PX_PER_CM
                         gtext = f"Girth: {gcm:.2f} cm"
