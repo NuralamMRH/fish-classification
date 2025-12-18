@@ -1,0 +1,7 @@
+{
+    "version": 1,
+    "model": "FPN_resnet_18",
+    "input_img_size": 416,
+    "date": "31-07-2024",
+    "author": "Codahead@Andrew"
+}

@@ -1,0 +1,13 @@
+opencv-python>=4.1.2
+numpy>=1.15
+pycocotools>=2.0.2
+pillow>=7.1.1
+Shapely
+pyyaml>=5.1
+torch>=2.0.1
+torchvision>=0.15.2
+flask>=2.0.0
+flask-cors>=4.0.0
+requests>=2.25.0
+mediapipe>=0.10.0
+scipy>=1.8.0
