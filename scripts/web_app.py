@@ -17,11 +17,15 @@ import tempfile
 import uuid
 from datetime import datetime
 from flask import Flask, request, render_template_string, redirect, flash, send_file
+from flask_cors import CORS
 from werkzeug.utils import secure_filename
 from math import pi
+from typing import Any, cast
+cv2 = cast(Any, cv2)
 
 app = Flask(__name__, static_folder=None)
 app.secret_key = 'fish_secret_2024'
+CORS(app)
 
 # Configuration (absolute paths)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -61,6 +65,41 @@ os.makedirs(TEMP_FOLDER, exist_ok=True)
 
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max
+API_REQUEST_COUNT = 0
+
+MODELS_STATUS_CACHE = None
+def _get_models_status_cached():
+    global MODELS_STATUS_CACHE
+    if MODELS_STATUS_CACHE is None:
+        MODELS_STATUS_CACHE = test_models()
+    return MODELS_STATUS_CACHE
+def _models_files_exist():
+    try:
+        paths = [
+            os.path.join(PROJECT_ROOT, 'models', 'detection', 'model.ts'),
+            os.path.join(PROJECT_ROOT, 'models', 'segmentation', 'model.ts'),
+            os.path.join(PROJECT_ROOT, 'models', 'classification', 'model.ckpt'),
+            os.path.join(PROJECT_ROOT, 'models', 'classification', 'database.pt'),
+            os.path.join(PROJECT_ROOT, 'models', 'face_detector', 'model.ts'),
+        ]
+        return all(os.path.exists(p) for p in paths)
+    except Exception:
+        return False
+def _quick_status():
+    ok = _models_files_exist()
+    return (ok, ok, ok, ok)
+
+def _clear_results_folder():
+    try:
+        for name in os.listdir(RESULTS_FOLDER):
+            p = os.path.join(RESULTS_FOLDER, name)
+            if os.path.isfile(p):
+                try:
+                    os.remove(p)
+                except Exception:
+                    pass
+    except Exception:
+        pass
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
@@ -82,7 +121,7 @@ if image is not None and detections and len(detections) > 0 and len(detections[0
 else:
     print('YOLO_FAIL')
 """
-        yolo_test = subprocess.run([sys.executable, "-c", yolo_script], capture_output=True, text=True, timeout=30)
+        yolo_test = subprocess.run([sys.executable, "-c", yolo_script], capture_output=True, text=True, timeout=90)
         
         # Test classification
         class_script = f"""
@@ -113,7 +152,7 @@ if image is not None and results and len(results) > 0:
 else:
     print('CLASS_FAIL')
 """
-        class_test = subprocess.run([sys.executable, "-c", class_script], capture_output=True, text=True, timeout=30)
+        class_test = subprocess.run([sys.executable, "-c", class_script], capture_output=True, text=True, timeout=90)
         
         seg_test = subprocess.run([
             sys.executable, "-c", """
@@ -128,7 +167,7 @@ if polys and len(polys) > 0 and len(polys[0].points) > 0:
 else:
     print('SEG_FAIL')
 """
-        ], capture_output=True, text=True, timeout=30)
+        ], capture_output=True, text=True, timeout=90)
         
         face_test = subprocess.run([
             sys.executable, "-c", """
@@ -143,7 +182,7 @@ if detections and detections[0]:
 else:
     print('FACE_FAIL')
 """
-        ], capture_output=True, text=True, timeout=30)
+        ], capture_output=True, text=True, timeout=90)
         
         yolo_ok = "YOLO_SUCCESS" in yolo_test.stdout
         class_ok = "CLASS_SUCCESS" in class_test.stdout
@@ -155,6 +194,10 @@ else:
     except Exception as e:
         print(f"Error testing models: {e}")
         return False, False, False, False
+
+import os as _os_pre
+if _os_pre.getenv('PREWARM_MODELS'):
+    _ = _get_models_status_cached()
 
 def _pairwise_max_distance(pts):
     try:
@@ -394,7 +437,8 @@ def create_annotated_image(image_path, detection_results):
                 except Exception:
                     pass
         
-        # Save annotated image under static/results
+        if len([n for n in os.listdir(RESULTS_FOLDER) if os.path.isfile(os.path.join(RESULTS_FOLDER, n))]) >= 100:
+            _clear_results_folder()
         result_filename = f"annotated_{uuid.uuid4().hex[:8]}.jpg"
         result_path = os.path.join(RESULTS_FOLDER, result_filename)
         cv2.imwrite(result_path, image)
@@ -408,6 +452,10 @@ def create_annotated_image(image_path, detection_results):
 def process_image_external(image_path, pixels_per_cm=None, length_type='AUTO', girth_factor=pi):
     """Process image using external scripts to avoid import conflicts."""
     try:
+        fast_mode = os.getenv('FAST_MODE') == '1'
+        disable_seg = os.getenv('DISABLE_SEGMENTATION') == '1' or fast_mode
+        disable_face = os.getenv('DISABLE_FACE') == '1' or fast_mode
+        disable_class = os.getenv('DISABLE_CLASSIFICATION') == '1'
         # First, detect fish with YOLO
         temp_dir = TEMP_FOLDER.replace("\\\\", "/")
         pr = PROJECT_ROOT.replace("\\", "/")
@@ -444,7 +492,7 @@ else:
 """
         
         yolo_result = subprocess.run([sys.executable, "-c", yolo_script], 
-                                   capture_output=True, text=True, timeout=30)
+                                   capture_output=True, text=True, timeout=120)
         
         # Parse YOLO result
         yolo_output = None
@@ -462,7 +510,8 @@ else:
             crop_path = fish['crop_path']
             
             # Classify this fish crop
-            class_script = f"""
+            if not disable_class:
+                class_script = f"""
 import sys, os, cv2, json, torch
 from PIL import Image
 sys.path.insert(0, os.path.join('{pr}', 'models', 'classification'))
@@ -508,21 +557,21 @@ except Exception:
     except Exception:
         print('CLASS_RESULT:' + json.dumps({{'species': 'Unknown', 'accuracy': 0.0}}))
 """
-            
-            class_result = subprocess.run([sys.executable, "-c", class_script], 
-                                        capture_output=True, text=True, timeout=30)
-            
-            # Parse classification result
-            class_output = None
-            for line in class_result.stdout.split('\n'):
-                if line.startswith('CLASS_RESULT:'):
-                    class_output = json.loads(line.replace('CLASS_RESULT:', ''))
-                    break
-            
-            if not class_output:
+                class_result = subprocess.run([sys.executable, "-c", class_script], 
+                                            capture_output=True, text=True, timeout=120)
+                class_output = None
+                for line in class_result.stdout.split('\n'):
+                    if line.startswith('CLASS_RESULT:'):
+                        class_output = json.loads(line.replace('CLASS_RESULT:', ''))
+                        break
+                if not class_output:
+                    class_output = {'species': 'Unknown', 'accuracy': 0.0}
+            else:
                 class_output = {'species': 'Unknown', 'accuracy': 0.0}
             
-            seg_script = f"""
+            seg_points = []
+            if not disable_seg:
+                seg_script = f"""
 import sys, os, cv2, json
 sys.path.insert(0, os.path.join('{pr}', 'models', 'segmentation'))
 from inference import Inference
@@ -535,16 +584,17 @@ if image is not None and polys and len(polys) > 0 and len(polys[0].points) > 0:
 else:
     print('SEG_RESULT:' + json.dumps({{'points': []}}))
 """
-            seg_result = subprocess.run([sys.executable, "-c", seg_script],
-                                        capture_output=True, text=True, timeout=30)
-            seg_points = []
-            for line in seg_result.stdout.split('\n'):
-                if line.startswith('SEG_RESULT:'):
-                    seg_output = json.loads(line.replace('SEG_RESULT:', ''))
-                    seg_points = seg_output.get('points', [])
-                    break
+                seg_result = subprocess.run([sys.executable, "-c", seg_script],
+                                            capture_output=True, text=True, timeout=120)
+                for line in seg_result.stdout.split('\n'):
+                    if line.startswith('SEG_RESULT:'):
+                        seg_output = json.loads(line.replace('SEG_RESULT:', ''))
+                        seg_points = seg_output.get('points', [])
+                        break
             
-            face_script = f"""
+            face_box = []
+            if not disable_face:
+                face_script = f"""
 import sys, os, cv2, json
 sys.path.insert(0, os.path.join('{pr}', 'models', 'face_detector'))
 from inference import YOLOInference
@@ -557,14 +607,13 @@ if image is not None and detections and len(detections) > 0 and len(detections[0
 else:
     print('FACE_RESULT:' + json.dumps({{'box': []}}))
 """
-            face_result = subprocess.run([sys.executable, "-c", face_script],
-                                         capture_output=True, text=True, timeout=30)
-            face_box = []
-            for line in face_result.stdout.split('\n'):
-                if line.startswith('FACE_RESULT:'):
-                    face_output = json.loads(line.replace('FACE_RESULT:', ''))
-                    face_box = face_output.get('box', [])
-                    break
+                face_result = subprocess.run([sys.executable, "-c", face_script],
+                                             capture_output=True, text=True, timeout=120)
+                for line in face_result.stdout.split('\n'):
+                    if line.startswith('FACE_RESULT:'):
+                        face_output = json.loads(line.replace('FACE_RESULT:', ''))
+                        face_box = face_output.get('box', [])
+                        break
             
             x1, y1, x2, y2 = fish['box']
             global_seg_points = [(p[0] + x1, p[1] + y1) for p in seg_points]
@@ -1066,7 +1115,7 @@ HTML_TEMPLATE = """
 
 @app.route('/', methods=['GET', 'POST'])
 def index():
-    yolo_ok, class_ok, seg_ok, face_ok = test_models()
+    yolo_ok, class_ok, seg_ok, face_ok = _quick_status()
     yolo_status = "✅ Working" if yolo_ok else "❌ Error"
     class_status = "✅ Working" if class_ok else "❌ Error"
     seg_status = "✅ Working" if seg_ok else "❌ Error"
@@ -1157,11 +1206,15 @@ def api():
     if not allowed_file(file.filename):
         return {"error": "Invalid file type"}, 400
     
-    yolo_ok, class_ok, seg_ok, face_ok = test_models()
-    if not (yolo_ok and class_ok and seg_ok and face_ok):
+    if not _models_files_exist():
         return {"error": "Models not ready"}, 503
     
     try:
+        global API_REQUEST_COUNT
+        API_REQUEST_COUNT += 1
+        if API_REQUEST_COUNT >= 100:
+            _clear_results_folder()
+            API_REQUEST_COUNT = 0
         pixels_per_cm = request.form.get('pixels_per_cm')
         length_type = request.form.get('length_type') or 'AUTO'
         girth_factor = request.form.get('girth_factor')
@@ -1186,7 +1239,11 @@ def api():
 @app.route('/health')
 def health():
     """Health check endpoint."""
-    yolo_ok, class_ok, seg_ok, face_ok = test_models()
+    mode = request.args.get('mode') or 'quick'
+    if mode == 'full':
+        yolo_ok, class_ok, seg_ok, face_ok = test_models()
+    else:
+        yolo_ok, class_ok, seg_ok, face_ok = _quick_status()
     return {
         "status": "healthy" if (yolo_ok and class_ok and seg_ok and face_ok) else "degraded",
         "yolo_detector": "✅ Working" if yolo_ok else "❌ Error",
@@ -1223,4 +1280,7 @@ if __name__ == '__main__':
     print("⏹️  Press Ctrl+C to stop the server")
     print()
     
-    app.run(host='0.0.0.0', port=5001, debug=True) 
+    port = int(os.environ.get('PORT', '5001'))
+    debug_env = os.environ.get('FLASK_DEBUG', '')
+    debug = True if str(debug_env).lower() in ('1', 'true', 'yes') else False
+    app.run(host='0.0.0.0', port=port, debug=debug) 
