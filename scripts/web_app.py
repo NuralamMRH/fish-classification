@@ -15,6 +15,7 @@ import json
 import subprocess
 import tempfile
 import uuid
+import shutil
 from datetime import datetime
 from flask import Flask, request, render_template_string, redirect, flash, send_file
 from flask_cors import CORS
@@ -628,6 +629,13 @@ else:
                 "segmentation": {"points": global_seg_points} if global_seg_points else None,
                 "face_box": global_face_box if global_face_box else None
             }
+            try:
+                mask_filename = f"crop_mask_{uuid.uuid4().hex[:8]}_fish{fish['fish_id']}.jpg"
+                mask_dst = os.path.join(RESULTS_FOLDER, mask_filename)
+                shutil.copy2(crop_path, mask_dst)
+                final_item["crop_mask_image"] = os.path.join('results', mask_filename)
+            except Exception:
+                pass
             
             try:
                 img = cv2.imread(image_path)
@@ -1014,6 +1022,10 @@ HTML_TEMPLATE = """
                         {% endif %}
                     </p>
                 {% endif %}
+            {% endif %}
+            {% if fish.crop_mask_image %}
+                <p><strong>Masked Crop:</strong> <a href="/static/{{ fish.crop_mask_image }}" target="_blank">Open</a></p>
+                <img src="/static/{{ fish.crop_mask_image }}" alt="Masked Fish #{{ fish.fish_id }}" style="max-width:100%; border-radius:8px; margin-top:8px;">
             {% endif %}
         </div>
         {% endfor %}
