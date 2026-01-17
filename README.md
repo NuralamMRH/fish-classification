@@ -95,10 +95,10 @@ python -m modal setup
 python -m modal deploy /Volumes/NewVolume/RanMac/Programming/python/fish-classification/scripts/deploy_modal.py
 
 # Test the stable URL
-IMG_B64=$(base64 -i /Volumes/NewVolume/RanMac/Programming/python/fish-classification/fish.jpeg | tr -d '\n')
-curl -s -X POST 'https://rancoded-it--fish-classification-web-fastapi-app.modal.run/api' \
+IMG_B64=$(base64 -i /Volumes/NewVolume/RanMac/Programming/python/fish-classification/fish.jpg | tr -d '\n')
+curl -s -X POST 'https://rancoded-it--fish-classification-web-fastapi-app.modal.run' \
   -H 'Content-Type: application/json' \
-  -d '{"image_b64":"'"$IMG_B64"'","filename":"fish.jpeg","pixels_per_cm":null,"length_type":"AUTO","girth_factor":3.1416}'
+  -d '{"image_b64":"'"$IMG_B64"'","filename":"fish.jpg","pixels_per_cm":null,"length_type":"AUTO","girth_factor":3.1416}'
 ```
 
 ## REMOVE PREVIOUS MODAL AUTH AND SETUP FOR NEW
