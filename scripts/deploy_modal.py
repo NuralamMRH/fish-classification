@@ -154,11 +154,11 @@ document.getElementById('form').addEventListener('submit', async (e) => {
 @app.function(
     image=image,
     timeout=600,
-    min_containers=1,
-    max_containers=4,
-    gpu="T4",
+    min_containers=0,      # KEY CHANGE: Scale to zero when idle
+    max_containers=4,      # Allows 4 images to process at once if busy
+    gpu="L4",              # RECOMMENDATION: L4 is 3x faster than T4 for YOLOv10
     memory=4096,
-    scaledown_window=120
+    scaledown_window=30    # KEY CHANGE: Shut down after 30 seconds of idleness
 )
 @modal.asgi_app()
 def fastapi_app():
