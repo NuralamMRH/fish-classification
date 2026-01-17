@@ -11,6 +11,7 @@
 - Create venv and install deps:
   - `python3 -m venv .venv`
   - `source .venv/bin/activate`
+  - `source /Volumes/NewVolume/RanMac/Programming/python/fish-classification/.venv/bin/activate`
   - `pip install -r scripts/requirements.txt`
 - Run the app:
   - `python scripts/web_app.py`
@@ -75,7 +76,55 @@
 - Base64 encode it:
   - `IMG_B64=$(base64 -i fish.jpeg | tr -d '\n')`
 - Post to the API:
-  - `curl -X POST 'https://<your-app>.modal.run/api' -H 'Content-Type: application/json' -d '{"image_b64":"'"$IMG_B64"'","filename":"fish.jpg","pixels_per_cm":null,"length_type":"AUTO","girth_factor":3.1416}'`
+  - `curl -X POST 'https://<your-app>.modal.run/api' -H 'Content-Type: application/json' -d '{"image_b64":"'"$IMG_B64"'","filename":"fish.jpeg","pixels_per_cm":null,"length_type":"AUTO","girth_factor":3.1416}'`
+
+## Re deploy to modal after active vnv and install modal
+
+```bash
+# Activate this project’s venv
+source /Volumes/NewVolume/RanMac/Programming/python/fish-classification/.venv/bin/activate
+
+# Install modal CLI in this venv
+pip install --upgrade pip
+pip install modal
+
+# Authenticate (opens browser)
+python -m modal setup
+
+# Deploy production endpoint
+python -m modal deploy /Volumes/NewVolume/RanMac/Programming/python/fish-classification/scripts/deploy_modal.py
+
+# Test the stable URL
+IMG_B64=$(base64 -i /Volumes/NewVolume/RanMac/Programming/python/fish-classification/fish.jpeg | tr -d '\n')
+curl -s -X POST 'https://rancoded-it--fish-classification-web-fastapi-app.modal.run/api' \
+  -H 'Content-Type: application/json' \
+  -d '{"image_b64":"'"$IMG_B64"'","filename":"fish.jpeg","pixels_per_cm":null,"length_type":"AUTO","girth_factor":3.1416}'
+```
+
+## REMOVE PREVIOUS MODAL AUTH AND SETUP FOR NEW
+
+- Activate the project venv and install Modal into it:
+
+- source /Volumes/NewVolume/RanMac/Programming/python/fish-classification/.venv/bin/activate
+- python -m pip install --upgrade pip
+- python -m pip install --upgrade modal
+- Verify import and interpreter:
+
+- python -c "import modal, sys; print('modal', modal. version , 'python', sys.executable)"
+- Login (or switch account/workspace):
+
+- Option A: create a new profile (recommended)
+  - python -m modal setup --profile newacct
+  - export MODAL_PROFILE=newacct
+  - Use this profile for all commands:
+    - python -m modal deploy --profile newacct /Volumes/NewVolume/RanMac/Programming/python/fish-classification/scripts/deploy_modal.py
+- Option B: remove the old token and re-login
+  - rm -f ~/.modal.toml
+  - python -m modal setup
+- Deploy for production (stable URL, persists when terminal closes):
+
+- python -m modal deploy /Volumes/NewVolume/RanMac/Programming/python/fish-classification/scripts/deploy_modal.py
+- Copy the printed https://…modal.run URL and call POST /api on it
 
 ## Notes
 

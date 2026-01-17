@@ -168,12 +168,20 @@ def fastapi_app():
     from math import pi
     from starlette.applications import Starlette
     from starlette.requests import Request
-    from starlette.responses import JSONResponse
+    from starlette.responses import JSONResponse, FileResponse
 
     sys.path.insert(0, os.path.join(PROJECT_ROOT_REMOTE, "scripts"))
     import web_app
 
     app = Starlette()
+
+    @app.route("/static/{path:path}", methods=["GET"])
+    async def static_files(request: Request):
+        path = request.path_params.get("path") or ""
+        full_path = os.path.join(web_app.STATIC_FOLDER, path)
+        if os.path.exists(full_path):
+            return FileResponse(full_path)
+        return JSONResponse({"error": "Not found"}, status_code=404)
 
     @app.route("/api", methods=["POST"])
     async def post_root(request: Request):
@@ -208,7 +216,32 @@ def fastapi_app():
 
             if not results or not results.get("success"):
                 return JSONResponse(results or {"success": False, "error": "Unknown processing error"})
-            return JSONResponse(results)
+            def file_to_b64(rel_path):
+                try:
+                    full_path = os.path.join(web_app.STATIC_FOLDER, rel_path)
+                    if os.path.exists(full_path):
+                        with open(full_path, "rb") as f:
+                            import base64 as _b
+                            return _b.b64encode(f.read()).decode("utf-8")
+                except Exception:
+                    pass
+                return None
+            resp = dict(results)
+            if results.get("annotated_image"):
+                b64 = file_to_b64(results["annotated_image"])
+                if b64:
+                    resp["annotated_image_b64"] = b64
+            fish_out = []
+            for fi in results.get("fish", []):
+                item = dict(fi)
+                cm = fi.get("crop_mask_image")
+                if cm:
+                    cm_b64 = file_to_b64(cm)
+                    if cm_b64:
+                        item["crop_mask_image_b64"] = cm_b64
+                fish_out.append(item)
+            resp["fish"] = fish_out
+            return JSONResponse(resp)
         except Exception as e:
             return JSONResponse(status_code=500, content={"success": False, "error": f"Server error: {str(e)}"})
 
