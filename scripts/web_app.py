@@ -17,6 +17,7 @@ import tempfile
 import uuid
 import shutil
 from datetime import datetime
+# shutil is used to copy crop masks to static/results
 from flask import Flask, request, render_template_string, redirect, flash, send_file
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
@@ -632,6 +633,7 @@ else:
             try:
                 mask_filename = f"crop_mask_{uuid.uuid4().hex[:8]}_fish{fish['fish_id']}.jpg"
                 mask_dst = os.path.join(RESULTS_FOLDER, mask_filename)
+                # copy cropped mask to static/results for UI display
                 shutil.copy2(crop_path, mask_dst)
                 final_item["crop_mask_image"] = os.path.join('results', mask_filename)
             except Exception:
@@ -1024,6 +1026,7 @@ HTML_TEMPLATE = """
                 {% endif %}
             {% endif %}
             {% if fish.crop_mask_image %}
+                <!-- Masked crop preview -->
                 <p><strong>Masked Crop:</strong> <a href="/static/{{ fish.crop_mask_image }}" target="_blank">Open</a></p>
                 <img src="/static/{{ fish.crop_mask_image }}" alt="Masked Fish #{{ fish.fish_id }}" style="max-width:100%; border-radius:8px; margin-top:8px;">
             {% endif %}
