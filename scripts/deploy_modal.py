@@ -22,6 +22,11 @@ image = modal.Image.debian_slim().apt_install(
         "pyyaml>=5.1",
         "torch>=2.0.1",
         "torchvision>=0.15.2",
+        "timm>=0.9.0",
+        "scikit-learn>=1.2.0",
+        "scipy>=1.10.0",
+        "faiss-cpu>=1.7.4",
+        "joblib>=1.2.0",
         "flask>=2.0.0",
         "flask-cors>=4.0.0",
         "requests>=2.25.0",
@@ -151,42 +156,31 @@ document.getElementById('form').addEventListener('submit', async (e) => {
 </html>
 """
 
-@app.function(
+@app.cls(
     image=image,
     timeout=600,
-    min_containers=0,      # KEY CHANGE: Scale to zero when idle
-    max_containers=4,      # Allows 4 images to process at once if busy
-    gpu="L4",              # RECOMMENDATION: L4 is 3x faster than T4 for YOLOv10
+    min_containers=0,
+    max_containers=4,
+    gpu="L4",
     memory=4096,
-    scaledown_window=30    # KEY CHANGE: Shut down after 30 seconds of idleness
+    scaledown_window=30
 )
-@modal.asgi_app()
-def fastapi_app():
-    import os
-    import base64
-    import sys
-    from math import pi
-    from starlette.applications import Starlette
-    from starlette.requests import Request
-    from starlette.responses import JSONResponse, FileResponse
+class FishModel:
+    @modal.enter()
+    def load_models(self):
+        import sys, os
+        sys.path.insert(0, os.path.join(PROJECT_ROOT_REMOTE, "scripts"))
+        import web_app as _web_app
+        self.web_app = _web_app
+        os.makedirs(self.web_app.UPLOAD_FOLDER, exist_ok=True)
+        os.makedirs(self.web_app.RESULTS_FOLDER, exist_ok=True)
+        os.makedirs(self.web_app.STATIC_FOLDER, exist_ok=True)
+        os.environ["DISABLE_FACE"] = "1"
 
-    sys.path.insert(0, os.path.join(PROJECT_ROOT_REMOTE, "scripts"))
-    import web_app
-
-    app = Starlette()
-
-    @app.route("/static/{path:path}", methods=["GET"])
-    async def static_files(request: Request):
-        path = request.path_params.get("path") or ""
-        full_path = os.path.join(web_app.STATIC_FOLDER, path)
-        if os.path.exists(full_path):
-            return FileResponse(full_path)
-        return JSONResponse({"error": "Not found"}, status_code=404)
-
-    @app.route("/api", methods=["POST"])
-    async def post_root(request: Request):
+    @modal.web_endpoint(method="POST")
+    def api(self, body: dict):
         try:
-            body = await request.json()
+            from math import pi
             image_b64 = body.get("image_b64")
             filename = body.get("filename") or "upload.jpg"
             pixels_per_cm = body.get("pixels_per_cm")
@@ -194,15 +188,13 @@ def fastapi_app():
             girth_factor = float(body.get("girth_factor") or pi)
 
             if not image_b64:
-                return JSONResponse(status_code=400, content={"success": False, "error": "Missing image_b64"})
+                return {"success": False, "error": "Missing image_b64"}
 
-            upload_dir = web_app.UPLOAD_FOLDER
-            os.makedirs(upload_dir, exist_ok=True)
-            tmp_path = os.path.join(upload_dir, filename)
+            tmp_path = os.path.join(self.web_app.UPLOAD_FOLDER, filename)
             with open(tmp_path, "wb") as f:
                 f.write(base64.b64decode(image_b64))
 
-            results = web_app.process_image_external(
+            results = self.web_app.process_image_external(
                 tmp_path,
                 pixels_per_cm=pixels_per_cm if pixels_per_cm else None,
                 length_type=length_type,
@@ -214,25 +206,23 @@ def fastapi_app():
             except Exception:
                 pass
 
-            if not results or not results.get("success"):
-                return JSONResponse(results or {"success": False, "error": "Unknown processing error"})
             def file_to_b64(rel_path):
                 try:
-                    full_path = os.path.join(web_app.STATIC_FOLDER, rel_path)
+                    full_path = os.path.join(self.web_app.STATIC_FOLDER, rel_path)
                     if os.path.exists(full_path):
                         with open(full_path, "rb") as f:
-                            import base64 as _b
-                            return _b.b64encode(f.read()).decode("utf-8")
+                            return base64.b64encode(f.read()).decode("utf-8")
                 except Exception:
                     pass
                 return None
-            resp = dict(results)
-            if results.get("annotated_image"):
+
+            resp = dict(results or {})
+            if results and results.get("annotated_image"):
                 b64 = file_to_b64(results["annotated_image"])
                 if b64:
                     resp["annotated_image_b64"] = b64
             fish_out = []
-            for fi in results.get("fish", []):
+            for fi in (results.get("fish", []) if results else []):
                 item = dict(fi)
                 cm = fi.get("crop_mask_image")
                 if cm:
@@ -241,8 +231,6 @@ def fastapi_app():
                         item["crop_mask_image_b64"] = cm_b64
                 fish_out.append(item)
             resp["fish"] = fish_out
-            return JSONResponse(resp)
+            return resp if resp else {"success": False, "error": "Unknown processing error"}
         except Exception as e:
-            return JSONResponse(status_code=500, content={"success": False, "error": f"Server error: {str(e)}"})
-
-    return app
+            return {"success": False, "error": f"Server error: {str(e)}"}
